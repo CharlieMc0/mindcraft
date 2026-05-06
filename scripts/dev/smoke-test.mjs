@@ -10,6 +10,7 @@
 
 import mineflayer from 'mineflayer';
 import pkg from 'mineflayer-pathfinder';
+import collectBlockPlugin from 'mineflayer-collectblock';
 import { resolveModId } from '../../src/utils/modcompat/registry_client.js';
 import { attachModCompat } from '../../src/utils/modcompat/handshake_router.js';
 import { preloadRegistries, lookupBlockIdByName, lookupBlockNameById } from '../../src/utils/modcompat/registry_overlay.js';
@@ -35,6 +36,7 @@ const bot = mineflayer.createBot({
 attachModCompat(bot, { modpack: 'homestead', modbridge_url: BRIDGE });
 preloadRegistries(BRIDGE);
 bot.loadPlugin(pathfinder);
+bot.loadPlugin(collectBlockPlugin.plugin);
 
 // Suppress noisy PartialReadError on mod packets — mineflayer can't decode some
 // modded payloads but they aren't critical for the smoke test.
@@ -96,6 +98,39 @@ bot.once('spawn', async () => {
         } catch (err) {
             record('chat_send', false, err.message);
         }
+
+        // Search nearby for vanilla wood (any *_log block) — proves bot's chunk
+        // sensor picks up vanilla blocks in a modded world.
+        const logTypes = ['oak_log', 'birch_log', 'spruce_log', 'jungle_log',
+            'acacia_log', 'dark_oak_log', 'mangrove_log', 'cherry_log']
+            .map((n) => bot.registry.blocksByName[n]?.id).filter(Boolean);
+        const log = bot.findBlock({ matching: logTypes, maxDistance: 64 });
+        record('find_wood', !!log, log ? `${log.name} @ ${log.position.x},${log.position.y},${log.position.z}` : 'none within 64');
+
+        // Try collecting it — exercises pathfinder + collectblock + dig path.
+        if (log) {
+            try {
+                const before = bot.inventory.items().length;
+                await Promise.race([
+                    bot.collectBlock.collect(log),
+                    new Promise((_, rej) => setTimeout(() => rej(new Error('collect timeout')), 30_000)),
+                ]);
+                const after = bot.inventory.items().length;
+                record('harvest_wood', after > before, `inv ${before}→${after}`);
+            } catch (err) {
+                record('harvest_wood', false, err.message);
+            }
+        } else {
+            record('harvest_wood', false, 'skipped — no log found');
+        }
+
+        // Search for any nearby vanilla ore (or stone fallback) to confirm ore search works.
+        const oreTypes = ['coal_ore', 'iron_ore', 'copper_ore', 'gold_ore',
+            'diamond_ore', 'redstone_ore', 'lapis_ore', 'emerald_ore',
+            'deepslate_coal_ore', 'deepslate_iron_ore', 'deepslate_diamond_ore']
+            .map((n) => bot.registry.blocksByName[n]?.id).filter(Boolean);
+        const ore = bot.findBlock({ matching: oreTypes, maxDistance: 64 });
+        record('find_ore', !!ore, ore ? `${ore.name} @ ${ore.position.x},${ore.position.y},${ore.position.z}` : 'none within 64');
 
         await new Promise((r) => setTimeout(r, 1500));
     } catch (err) {
