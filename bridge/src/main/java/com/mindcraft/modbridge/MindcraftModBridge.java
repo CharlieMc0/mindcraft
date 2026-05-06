@@ -7,6 +7,7 @@ import java.io.IOException;
 import java.io.OutputStream;
 import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicReference;
@@ -55,9 +56,54 @@ public final class MindcraftModBridge {
         server.createContext("/health", MindcraftModBridge::handleHealth);
         server.createContext("/owo/hashes", MindcraftModBridge::handleOwoHashes);
         server.createContext("/owo/debug", MindcraftModBridge::handleOwoDebug);
+        server.createContext("/registry/blocks", ex -> handleRegistry(ex, "blocks"));
+        server.createContext("/registry/items",  ex -> handleRegistry(ex, "items"));
         server.setExecutor(null);
         server.start();
         System.out.println("[bridge] Bridge listening on :" + port);
+    }
+
+    /**
+     * Serve a slice of the registry JSON written by the dumper mod's RegistryDumper.
+     * Path: $CHDUMP_REGISTRY_PATH or $TMPDIR/mindcraft-modcompat-registry.json.
+     * Re-reads on every request so a server restart picks up new entries without
+     * needing to restart the bridge.
+     */
+    private static void handleRegistry(HttpExchange ex, String key) throws IOException {
+        Path file = registryPath();
+        if (!Files.isRegularFile(file)) {
+            respond(ex, 503, "{\"error\":\"registry dump not found\",\"path\":\"" + jsonEscape(file.toString()) + "\"}");
+            return;
+        }
+        String all = Files.readString(file, StandardCharsets.UTF_8);
+        // Cheap slice: find "<key>": and copy the matching {...}.
+        String marker = "\"" + key + "\":";
+        int start = all.indexOf(marker);
+        if (start < 0) {
+            respond(ex, 404, "{\"error\":\"key not in dump\",\"key\":\"" + key + "\"}");
+            return;
+        }
+        int objStart = all.indexOf('{', start);
+        int depth = 0, objEnd = -1;
+        for (int i = objStart; i < all.length(); i++) {
+            char c = all.charAt(i);
+            if (c == '{') depth++;
+            else if (c == '}') {
+                depth--;
+                if (depth == 0) { objEnd = i + 1; break; }
+            }
+        }
+        if (objEnd < 0) {
+            respond(ex, 500, "{\"error\":\"malformed registry dump\"}");
+            return;
+        }
+        respond(ex, 200, all.substring(objStart, objEnd));
+    }
+
+    private static Path registryPath() {
+        String env = System.getenv("CHDUMP_REGISTRY_PATH");
+        if (env != null && !env.isEmpty()) return Path.of(env);
+        return Path.of(System.getProperty("java.io.tmpdir"), "mindcraft-modcompat-registry.json");
     }
 
     private static void handleHealth(HttpExchange ex) throws IOException {

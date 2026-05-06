@@ -26,6 +26,12 @@ public final class ChannelHashDumper implements DedicatedServerModInitializer {
                 System.err.println("[CH-DUMP] FAILED: " + t);
                 t.printStackTrace();
             }
+            try {
+                RegistryDumper.dump();
+            } catch (Throwable t) {
+                System.err.println("[REG-DUMP] FAILED: " + t);
+                t.printStackTrace();
+            }
             // CHDUMP_DISABLE_FROZENLIB=1 sets ServerRegistrySync.forceDisable=true, which
             // makes requiresSync() return false. Useful when a client can't satisfy the
             // registry sync handshake — server still runs the dance but case-1 no longer
