@@ -15,6 +15,14 @@ case "$MODE" in
         OVERRIDES='{"host":"localhost","port":25566,"auth":"offline","modpack":null,"only_chat_with":[],"init_message":"hello world"}'
         ;;
     homestead)
+        # Real friend's server. Each connect is visible to admin. Requires
+        # explicit opt-in via env var to avoid accidental traffic.
+        if [ "${ALLOW_REMOTE:-}" != "1" ]; then
+            echo "MODE=homestead targets the real Homestead server (208.83.184.145:25565)."
+            echo "Refusing to connect without ALLOW_REMOTE=1."
+            echo "Use MODE=homestead-local for unsupervised testing."
+            exit 1
+        fi
         OVERRIDES='{"host":"208.83.184.145","port":25565,"auth":"microsoft","modpack":"homestead","init_message":"hello world"}'
         ;;
     homestead-local)
