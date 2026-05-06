@@ -46,6 +46,38 @@ Do not connect this bot to public servers with coding enabled. This project allo
 If you encounter issues, check the [FAQ](https://github.com/mindcraft-bots/mindcraft/blob/main/FAQ.md) or find support on [discord](https://discord.gg/mp73p35dzC). We are currently not very responsive to github issues. To run tasks please refer to [Minecollab Instructions](minecollab.md#installation)
 
 
+# Modded Fabric Servers (this fork)
+
+This fork adds support for connecting to heavy Fabric modpacks
+(initial target: Modrinth's *Homestead*, 1.20.1). Vanilla mineflayer
+gets kicked from such servers because mods like `owo-lib` and
+`frozenlib` enforce strict client/server protocol parity. We satisfy
+those gates with a small Java daemon (`bridge/`) that ASM-scans the
+modpack's mod jars to compute the exact hashes the server expects,
+plus a JS layer (`src/utils/modcompat/`) that drives the handshakes.
+
+Quick start (assuming the modpack is installed via the Modrinth App):
+
+```bash
+./bridge/run.sh                                  # Java daemon, :7474
+./scripts/dev/start-homestead-server.sh          # local Fabric server, :25567
+MODE=homestead-local ./scripts/dev/run-bot.sh    # bot
+```
+
+End-to-end smoke test:
+
+```bash
+node scripts/dev/smoke-test.mjs
+```
+
+Architecture overview, invariants, onboarding a new modpack, and
+contributor notes are in [`CLAUDE.md`](CLAUDE.md). HTTP surface and
+how the hash reconstruction works are in [`bridge/README.md`](bridge/README.md).
+
+To enable on your own modpack, set `modpack: "<name>"` in
+`settings.js` and point the bridge at your modpack mods directory
+(default: `~/Library/Application Support/ModrinthApp/profiles/Homestead/mods`).
+
 # Configuration
 ## Model Customization
 
