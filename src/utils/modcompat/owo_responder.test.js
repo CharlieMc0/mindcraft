@@ -20,6 +20,17 @@ function startMockBridge(payload) {
     });
 }
 
+function makeFakeClient() {
+    const listeners = {};
+    let captured = null;
+    return {
+        on(event, cb) { listeners[event] = cb; },
+        write(name, pkt) { captured = { name, pkt }; },
+        emit(event, packet) { if (listeners[event]) listeners[event](packet); },
+        get captured() { return captured; },
+    };
+}
+
 test('owo responder writes correct 3-map wire format', async () => {
     clearCache();
     const payload = {
@@ -30,39 +41,21 @@ test('owo responder writes correct 3-map wire format', async () => {
     const srv = await startMockBridge(payload);
     const port = srv.address().port;
 
-    let captured = null;
-    const fakeClient = {
-        on() { /* listener registry not needed for this test */ },
-        write(name, pkt) {
-            captured = { name, pkt };
-        },
-    };
-    // Stub bot just enough to drive the responder.
+    const fakeClient = makeFakeClient();
     attachOwoResponder(fakeClient, { modbridge_url: `http://127.0.0.1:${port}` });
-
-    // Drive the listener by simulating the login_plugin_request callback.
-    // attachOwoResponder hooks via client.on('login_plugin_request', cb); we need
-    // to capture and invoke that callback.
-    let owoCb = null;
-    fakeClient.on = (event, cb) => { if (event === 'login_plugin_request') owoCb = cb; };
-    // Reattach with the real .on hook now in place.
-    clearCache();
-    attachOwoResponder(fakeClient, { modbridge_url: `http://127.0.0.1:${port}` });
-    assert.ok(owoCb, 'responder did not register login_plugin_request listener');
 
     // Wait for prewarm fetch to finish (bridge mock may race).
     await new Promise((r) => setTimeout(r, 50));
 
-    await owoCb({ channel: 'owo:handshake', messageId: 0, data: Buffer.from([0]) });
-    // Need a tick for the async respond() path to write.
+    fakeClient.emit('login_plugin_request', { channel: 'owo:handshake', messageId: 0, data: Buffer.from([0]) });
     await new Promise((r) => setTimeout(r, 50));
 
+    const captured = fakeClient.captured;
     assert.ok(captured, 'responder did not write login_plugin_response');
     assert.strictEqual(captured.name, 'login_plugin_response');
     assert.strictEqual(captured.pkt.messageId, 0);
     assert.ok(Buffer.isBuffer(captured.pkt.data), 'data is not a Buffer');
 
-    // Decode and verify the 3-map structure.
     const buf = captured.pkt.data;
     let cursor = 0;
     const m1 = decodeMap(buf, cursor); cursor += m1.bytes;

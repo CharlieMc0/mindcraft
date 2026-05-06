@@ -5,7 +5,6 @@ import net.fabricmc.fabric.api.event.lifecycle.v1.ServerLifecycleEvents;
 
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
-import java.util.Iterator;
 import java.util.Map;
 
 /**
@@ -27,26 +26,23 @@ public final class ChannelHashDumper implements DedicatedServerModInitializer {
                 System.err.println("[CH-DUMP] FAILED: " + t);
                 t.printStackTrace();
             }
-            try {
-                // disableFrozenlibSync();  // disabled — testing real frozenlib responder
-            } catch (Throwable t) {
-                System.err.println("[CH-DUMP] frozenlib disable FAILED: " + t);
+            // CHDUMP_DISABLE_FROZENLIB=1 sets ServerRegistrySync.forceDisable=true, which
+            // makes requiresSync() return false. Useful when a client can't satisfy the
+            // registry sync handshake — server still runs the dance but case-1 no longer
+            // kicks on syncVersion=-1.
+            if ("1".equals(System.getenv("CHDUMP_DISABLE_FROZENLIB"))) {
+                try {
+                    disableFrozenlibSync();
+                } catch (Throwable t) {
+                    System.err.println("[CH-DUMP] frozenlib disable FAILED: " + t);
+                }
             }
         });
     }
 
-    /**
-     * Sets `org.quiltmc.qsl.frozenblock.core.registry.impl.sync.server.ServerRegistrySync.forceDisable = true`
-     * which makes `requiresSync()` return false. The registry sync handshake
-     * still runs (server still sends Hello + pings), but server's case-1 path
-     * with syncVersion=-1 no longer kicks. Any client that fails the dance is
-     * silently allowed through.
-     *
-     * Local-server-only bypass while we work out the bot-side handshake race.
-     */
     private void disableFrozenlibSync() throws Exception {
         Class<?> cls = Class.forName("org.quiltmc.qsl.frozenblock.core.registry.impl.sync.server.ServerRegistrySync");
-        java.lang.reflect.Field f = cls.getDeclaredField("forceDisable");
+        Field f = cls.getDeclaredField("forceDisable");
         f.setAccessible(true);
         f.setBoolean(null, true);
         System.out.println("[CH-DUMP] frozenlib registry sync disabled (forceDisable=true)");
