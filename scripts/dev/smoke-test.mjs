@@ -12,6 +12,7 @@ import mineflayer from 'mineflayer';
 import pkg from 'mineflayer-pathfinder';
 import { resolveModId } from '../../src/utils/modcompat/registry_client.js';
 import { attachModCompat } from '../../src/utils/modcompat/handshake_router.js';
+import { preloadRegistries, lookupBlockIdByName, lookupBlockNameById } from '../../src/utils/modcompat/registry_overlay.js';
 
 const { pathfinder, Movements, goals } = pkg;
 
@@ -32,6 +33,7 @@ const bot = mineflayer.createBot({
     checkTimeoutInterval: 60000,
 });
 attachModCompat(bot, { modpack: 'homestead', modbridge_url: BRIDGE });
+preloadRegistries(BRIDGE);
 bot.loadPlugin(pathfinder);
 
 // Suppress noisy PartialReadError on mod packets — mineflayer can't decode some
@@ -62,6 +64,17 @@ bot.once('spawn', async () => {
         // Try to resolve a likely-modded item id via bridge (use 1003 — beautify:bookstack from earlier dump).
         const modName = await resolveModId(BRIDGE, 'blocks', 1003);
         record('bridge_lookup_block_1003', !!modName && modName.includes(':'), modName || 'undefined');
+
+        // Wait briefly for the overlay to populate from the bridge fetches.
+        await new Promise((r) => setTimeout(r, 1000));
+
+        // mcdata-style lookups via the registry overlay (the same path mc.getBlockId
+        // / getBlockName take). Validates that the LLM-side block resolution will
+        // hit modded entries.
+        const overlayId = lookupBlockIdByName('beautify:bookstack');
+        record('overlay_block_name_to_id', overlayId === 1003, `beautify:bookstack -> ${overlayId}`);
+        const overlayName = lookupBlockNameById(1003);
+        record('overlay_block_id_to_name', overlayName === 'beautify:bookstack', `1003 -> ${overlayName}`);
 
         // Walk 3 blocks forward.
         const movements = new Movements(bot);

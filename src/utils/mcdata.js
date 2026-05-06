@@ -8,6 +8,12 @@ import { plugin as collectblock } from 'mineflayer-collectblock';
 import { plugin as autoEat } from 'mineflayer-auto-eat';
 import plugin from 'mineflayer-armor-manager';
 import { attachModCompat } from './modcompat/handshake_router.js';
+import {
+    preloadRegistries,
+    lookupBlockIdByName, lookupBlockNameById,
+    lookupItemIdByName, lookupItemNameById,
+    syntheticBlocks, syntheticItems,
+} from './modcompat/registry_overlay.js';
 const armorManager = plugin;
 let mc_version = settings.minecraft_version;
 let mcdata = null;
@@ -72,6 +78,13 @@ export function initBot(username) {
     // When settings.modpack is set, this routes owo:handshake (and future gates) to a
     // local Java bridge daemon. With modpack=null, only diagnostic logging runs.
     attachModCompat(bot, settings);
+
+    // Pre-fetch the modded block + item registries from the bridge so the lookup
+    // helpers below can resolve "<modid>:<path>" names. Async fire-and-forget;
+    // overlay is empty until the fetch resolves, then transparently kicks in.
+    if (settings.modpack && settings.modbridge_url) {
+        preloadRegistries(settings.modbridge_url);
+    }
 
     // Throttle position packets to avoid kicks on Paper/Spigot servers
     // Paper enforces stricter packet rate limits than vanilla, causing ECONNRESET
@@ -160,35 +173,27 @@ export function mustCollectManually(blockName) {
 }
 
 export function getItemId(itemName) {
-    let item = mcdata.itemsByName[itemName];
-    if (item) {
-        return item.id;
-    }
-    return null;
+    const item = mcdata.itemsByName[itemName];
+    if (item) return item.id;
+    return lookupItemIdByName(itemName);
 }
 
 export function getItemName(itemId) {
-    let item = mcdata.items[itemId]
-    if (item) {
-        return item.name;
-    }
-    return null;
+    const item = mcdata.items[itemId]
+    if (item) return item.name;
+    return lookupItemNameById(itemId);
 }
 
 export function getBlockId(blockName) {
-    let block = mcdata.blocksByName[blockName];
-    if (block) {
-        return block.id;
-    }
-    return null;
+    const block = mcdata.blocksByName[blockName];
+    if (block) return block.id;
+    return lookupBlockIdByName(blockName);
 }
 
 export function getBlockName(blockId) {
-    let block = mcdata.blocks[blockId]
-    if (block) {
-        return block.name;
-    }
-    return null;
+    const block = mcdata.blocks[blockId]
+    if (block) return block.name;
+    return lookupBlockNameById(blockId);
 }
 
 export function getEntityId(entityName) {
@@ -206,6 +211,11 @@ export function getAllItems(ignore) {
     let items = []
     for (const itemId in mcdata.items) {
         const item = mcdata.items[itemId];
+        if (!ignore.includes(item.name)) {
+            items.push(item);
+        }
+    }
+    for (const item of syntheticItems()) {
         if (!ignore.includes(item.name)) {
             items.push(item);
         }
@@ -229,6 +239,11 @@ export function getAllBlocks(ignore) {
     let blocks = []
     for (const blockId in mcdata.blocks) {
         const block = mcdata.blocks[blockId];
+        if (!ignore.includes(block.name)) {
+            blocks.push(block);
+        }
+    }
+    for (const block of syntheticBlocks()) {
         if (!ignore.includes(block.name)) {
             blocks.push(block);
         }
