@@ -1,0 +1,20 @@
+{
+  "schemaVersion": 1,
+  "id": "channelhashdumper",
+  "version": "1.0.0",
+  "name": "Channel Hash Dumper",
+  "description": "Dumps owo channel hashes + serializersByIndex on server start",
+  "environment": "server",
+  "entrypoints": {
+    "server": [
+      "com.mindcraft.dumper.ChannelHashDumper"
+    ]
+  },
+  "depends": {
+    "fabricloader": ">=0.14.0",
+    "fabric-api": "*",
+    "owo": "*",
+    "friendsforlife": "*",
+    "things": "*"
+  }
+}

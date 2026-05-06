@@ -427,5 +427,7 @@ export function getBiomeName(bot) {
      * let biome = world.getBiomeName(bot);
      **/
     const biomeId = bot.world.getBiome(bot.entity.position);
-    return mc.getAllBiomes()[biomeId].name;
+    // Modded biomes may be absent from minecraft-data's vanilla registry. Fall
+    // back to the numeric id so the bot doesn't crash on a missing entry.
+    return mc.getAllBiomes()[biomeId]?.name ?? `biome:${biomeId}`;
 }

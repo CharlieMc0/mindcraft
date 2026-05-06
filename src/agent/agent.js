@@ -11,7 +11,6 @@ import { MemoryBank } from './memory_bank.js';
 import { SelfPrompter } from './self_prompter.js';
 import convoManager from './conversation.js';
 import { handleTranslation, handleEnglishTranslation } from '../utils/translator.js';
-import { addBrowserViewer } from './vision/browser_viewer.js';
 import { serverProxy, sendOutputToServer } from './mindserver_proxy.js';
 import settings from './settings.js';
 import { Task } from './tasks/tasks.js';
@@ -109,7 +108,10 @@ export class Agent {
         this.bot.once('spawn', async () => {
             try {
                 clearTimeout(spawnTimeout);
-                addBrowserViewer(this.bot, count_id);
+                if (settings.render_bot_view) {
+                    const { addBrowserViewer } = await import('./vision/browser_viewer.js');
+                    addBrowserViewer(this.bot, count_id);
+                }
                 console.log('Initializing vision intepreter...');
                 this.vision_interpreter = new VisionInterpreter(this, settings.allow_vision);
 

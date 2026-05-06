@@ -28,3 +28,18 @@ tasks/construction_tasks/train/**
 server_data*
 **/.DS_Store
 src/mindcraft-py/__pycache__/
+
+# Mod compat layer build outputs + test logs.
+.claude/
+bridge/lib/
+bridge/out/
+bridge/logs/
+bridge/dumper-mod/lib/
+bridge/dumper-mod/out/
+bridge/dumper-mod/channelhashdumper-*.jar
+logs/bot-*.log
+logs/bot-*.pid
+logs/paper-server.log
+logs/homestead-server.log
+logs/bridge.log
+logs/bridge.pid

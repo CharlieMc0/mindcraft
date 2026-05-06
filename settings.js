@@ -1,8 +1,13 @@
 const settings = {
-    "minecraft_version": "auto", // or specific version like "1.21.6"
-    "host": "127.0.0.1", // or "localhost", "your.ip.address.here"
-    "port": 55916, // set to -1 to automatically scan for open ports
-    "auth": "offline", // or "microsoft"
+    "minecraft_version": "1.20.1",
+    "host": "208.83.184.145",
+    "port": 25565,
+    "auth": "microsoft",
+
+    // Mod compat: set to a profile name (e.g. "homestead") to route login plugin
+    // gates through the local mindcraft-modbridge Java daemon. null = vanilla.
+    "modpack": "homestead",
+    "modbridge_url": "http://localhost:7474",
 
     // the mindserver manages all agents and hosts the UI
     "mindserver_port": 8080,
@@ -10,7 +15,8 @@ const settings = {
     
     "base_profile": "assistant", // survival, assistant, creative, or god_mode
     "profiles": [
-        "./andy.json",
+        "./profiles/andy-4.json",
+        // "./andy.json",
         // "./profiles/gpt.json",
         // "./profiles/claude.json",
         // "./profiles/gemini.json",
@@ -20,7 +26,6 @@ const settings = {
         // "./profiles/mistral.json",
         // "./profiles/deepseek.json",
         // "./profiles/mercury.json",
-        // "./profiles/andy-4.json", // Supports up to 75 messages!
 
         // using more than 1 profile requires you to /msg each bot indivually
         // individual profiles override values from the base profile
@@ -28,7 +33,7 @@ const settings = {
 
     "load_memory": false, // load memory from previous session
     "init_message": "Respond with hello world and your name", // sends to all on spawn
-    "only_chat_with": [], // users that the bots listen to and send general messages to. if empty it will chat publicly
+    "only_chat_with": ["buttery_falcon", "mellowknee", "sethtc"], // users that the bots listen to and send general messages to. if empty it will chat publicly
 
     "speak": false,
     // allows all bots to speak through text-to-speech. 
@@ -53,7 +58,7 @@ const settings = {
     "narrate_behavior": true, // chat simple automatic actions ('Picking up item!')
     "chat_bot_messages": true, // publicly chat messages to other bots
 
-    "spawn_timeout": 30, // num seconds allowed for the bot to spawn before throwing error. Increase when spawning takes a while.
+    "spawn_timeout": 300, // num seconds allowed for the bot to spawn before throwing error. Increase when spawning takes a while.
     "block_place_delay": 0, // delay between placing blocks (ms) if using newAction. helps avoid bot being kicked by anti-cheat mechanisms on servers.
   
     "log_all_prompts": false, // log ALL prompts to file

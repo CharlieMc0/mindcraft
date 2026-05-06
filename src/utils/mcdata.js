@@ -7,6 +7,7 @@ import { plugin as pvp } from 'mineflayer-pvp';
 import { plugin as collectblock } from 'mineflayer-collectblock';
 import { plugin as autoEat } from 'mineflayer-auto-eat';
 import plugin from 'mineflayer-armor-manager';
+import { attachModCompat } from './modcompat/handshake_router.js';
 const armorManager = plugin;
 let mc_version = settings.minecraft_version;
 let mcdata = null;
@@ -66,6 +67,11 @@ export function initBot(username) {
     }
 
     const bot = createBot(options);
+
+    // Attach early — login_plugin_request fires during login phase, before 'login' event.
+    // When settings.modpack is set, this routes owo:handshake (and future gates) to a
+    // local Java bridge daemon. With modpack=null, only diagnostic logging runs.
+    attachModCompat(bot, settings);
 
     // Throttle position packets to avoid kicks on Paper/Spigot servers
     // Paper enforces stricter packet rate limits than vanilla, causing ECONNRESET

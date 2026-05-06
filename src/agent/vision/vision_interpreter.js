@@ -1,5 +1,4 @@
 import { Vec3 } from 'vec3';
-import { Camera } from "./camera.js";
 import fs from 'fs';
 
 export class VisionInterpreter {
@@ -8,7 +7,9 @@ export class VisionInterpreter {
         this.allow_vision = allow_vision;
         this.fp = './bots/'+agent.name+'/screenshots/';
         if (allow_vision) {
-            this.camera = new Camera(agent.bot, this.fp);
+            import("./camera.js").then(({ Camera }) => {
+                this.camera = new Camera(agent.bot, this.fp);
+            });
         }
     }
 
