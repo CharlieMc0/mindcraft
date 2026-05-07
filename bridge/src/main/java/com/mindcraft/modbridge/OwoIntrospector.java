@@ -10,6 +10,7 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.nio.file.*;
 import java.util.*;
+import java.util.function.Function;
 import java.util.jar.*;
 import java.util.stream.Stream;
 
@@ -291,91 +292,16 @@ public final class OwoIntrospector {
         return null;
     }
 
-    /** NEW Identifier; LDC ns; LDC path; INVOKESPECIAL <init>(String,String)  OR  Identifier.of(String,String) */
-    private static String walkBackForTwoStringIdentifier(AbstractInsnNode[] arr, int from) {
-        for (int j = from - 1; j >= 0 && j >= from - 50; j--) {
-            if (!(arr[j] instanceof MethodInsnNode mi)) continue;
-            boolean isCtor = mi.name.equals("<init>") && mi.desc != null
-                    && mi.desc.equals("(Ljava/lang/String;Ljava/lang/String;)V");
-            boolean isOf = mi.name.equals("of") && mi.desc != null
-                    && mi.desc.startsWith("(Ljava/lang/String;Ljava/lang/String;)L");
-            if (!isCtor && !isOf) continue;
-            String[] strings = collectPrecedingStringLdcs(arr, j, 2);
-            if (strings.length == 2) return strings[1] + ":" + strings[0]; // ns then path on stack: ns is deeper
+    /** Scan instructions backward starting at `from-1` for up to `window` steps,
+     *  returning the first `predicate` match projected through `extract`. */
+    private static <T> T scanBack(AbstractInsnNode[] arr, int from, int window,
+                                   Function<AbstractInsnNode, T> extract) {
+        for (int j = from - 1; j >= 0 && j >= from - window; j--) {
+            T v = extract.apply(arr[j]);
+            if (v != null) return v;
         }
         return null;
     }
-
-    /**
-     * INVOKESTATIC <X>.<m>(Ljava/lang/String;)L<resultType>; preceded by LDC path.
-     * Resolves the factory by inspecting its bytecode: looks for an Identifier
-     * construction with one constant LDC + the parameter (aload 0).
-     */
-    private static String walkBackForOneArgFactory(AbstractInsnNode[] arr, int from,
-                                                    Map<String, ClassEntry> classes) {
-        for (int j = from - 1; j >= 0 && j >= from - 30; j--) {
-            if (!(arr[j] instanceof MethodInsnNode mi)) continue;
-            if (mi.getOpcode() != Opcodes.INVOKESTATIC) continue;
-            if (mi.desc == null) continue;
-            // arg list: single String, returning a reference type
-            if (!mi.desc.startsWith("(Ljava/lang/String;)L")) continue;
-
-            String pathArg = collectPrecedingStringLdcs(arr, j, 1).length == 1
-                    ? collectPrecedingStringLdcs(arr, j, 1)[0] : null;
-            if (pathArg == null) continue;
-
-            String ns = resolveOneArgFactoryNamespace(mi.owner, mi.name, mi.desc, classes);
-            if (ns != null) return ns + ":" + pathArg;
-        }
-        return null;
-    }
-
-    /** Looks back for a single LDC string (used as fallback path arg). */
-    private static String walkBackForSingleStringLdc(AbstractInsnNode[] arr, int from) {
-        String[] s = collectPrecedingStringLdcs(arr, from, 1);
-        return s.length == 1 ? s[0] : null;
-    }
-
-    /** Collects up to N preceding LDC string constants in stack order (top-of-stack first). */
-    private static String[] collectPrecedingStringLdcs(AbstractInsnNode[] arr, int from, int n) {
-        List<String> out = new ArrayList<>();
-        for (int k = from - 1; k >= 0 && k >= from - 30 && out.size() < n; k--) {
-            if (arr[k] instanceof LdcInsnNode l && l.cst instanceof String s) out.add(s);
-        }
-        return out.toArray(new String[0]);
-    }
-
-    /** Inspects the body of a 1-arg static factory to find its namespace constant. */
-    private static String resolveOneArgFactoryNamespace(String owner, String name, String desc,
-                                                         Map<String, ClassEntry> classes) {
-        ClassEntry ce = classes.get(owner);
-        if (ce == null || ce.cn.methods == null) return null;
-        MethodNode target = null;
-        for (MethodNode m : ce.cn.methods) {
-            if (m.name.equals(name) && m.desc.equals(desc)) { target = m; break; }
-        }
-        if (target == null || target.instructions == null) return null;
-
-        // Look for: LDC ns; <something>; INVOKESPECIAL Identifier.<init>(String,String)V
-        // OR:       LDC ns; INVOKESTATIC Identifier.of(String,String)
-        AbstractInsnNode[] arr = target.instructions.toArray();
-        for (int i = 0; i < arr.length; i++) {
-            if (!(arr[i] instanceof MethodInsnNode mi)) continue;
-            boolean ctor = mi.name.equals("<init>") && mi.desc != null
-                    && mi.desc.equals("(Ljava/lang/String;Ljava/lang/String;)V");
-            boolean of = mi.name.equals("of") && mi.desc != null
-                    && mi.desc.startsWith("(Ljava/lang/String;Ljava/lang/String;)L");
-            if (!ctor && !of) continue;
-            // The factory likely is `new Identifier(<constant>, parameter)`. The constant LDC
-            // appears before any aload 0. Find the LDC.
-            for (int k = i - 1; k >= 0 && k >= i - 10; k--) {
-                if (arr[k] instanceof LdcInsnNode l && l.cst instanceof String s) return s;
-            }
-        }
-        return null;
-    }
-
-    // ------------------------------------------------------------------ Misc walk helpers
 
     private static String walkForwardForPutstatic(AbstractInsnNode[] arr, int from) {
         for (int j = from + 1; j < arr.length && j <= from + 10; j++) {
@@ -387,22 +313,92 @@ public final class OwoIntrospector {
     }
 
     private static String walkBackForGetstatic(AbstractInsnNode[] arr, int from, String desc) {
-        for (int j = from - 1; j >= 0 && j >= from - 30; j--) {
-            if (arr[j] instanceof FieldInsnNode fi && fi.getOpcode() == Opcodes.GETSTATIC
-                    && desc.equals(fi.desc)) {
-                return fi.owner + "." + fi.name;
+        return scanBack(arr, from, 30, n ->
+            (n instanceof FieldInsnNode fi && fi.getOpcode() == Opcodes.GETSTATIC && desc.equals(fi.desc))
+                ? fi.owner + "." + fi.name : null);
+    }
+
+    private static String walkBackForClassLdc(AbstractInsnNode[] arr, int from) {
+        return scanBack(arr, from, 30, n -> {
+            if (n instanceof LdcInsnNode l && l.cst instanceof Type t && t.getSort() == Type.OBJECT) {
+                return t.getClassName();
+            }
+            return null;
+        });
+    }
+
+    /** NEW Identifier; LDC ns; LDC path; INVOKESPECIAL <init>(String,String)  OR  Identifier.of(String,String) */
+    private static String walkBackForTwoStringIdentifier(AbstractInsnNode[] arr, int from) {
+        return scanBack(arr, from, 50, n -> {
+            if (!(n instanceof MethodInsnNode mi)) return null;
+            boolean isCtor = mi.name.equals("<init>") && "(Ljava/lang/String;Ljava/lang/String;)V".equals(mi.desc);
+            boolean isOf = mi.name.equals("of") && mi.desc != null
+                    && mi.desc.startsWith("(Ljava/lang/String;Ljava/lang/String;)L");
+            if (!isCtor && !isOf) return null;
+            int idx = indexOf(arr, n);
+            String[] strings = collectPrecedingStringLdcs(arr, idx, 2);
+            return strings.length == 2 ? strings[1] + ":" + strings[0] : null;
+        });
+    }
+
+    /**
+     * INVOKESTATIC <X>.<m>(Ljava/lang/String;)L<resultType>; preceded by LDC path.
+     * Resolves the factory by inspecting its body for `new Identifier(constLDC, param)`.
+     */
+    private static String walkBackForOneArgFactory(AbstractInsnNode[] arr, int from,
+                                                    Map<String, ClassEntry> classes) {
+        return scanBack(arr, from, 30, n -> {
+            if (!(n instanceof MethodInsnNode mi)) return null;
+            if (mi.getOpcode() != Opcodes.INVOKESTATIC || mi.desc == null) return null;
+            if (!mi.desc.startsWith("(Ljava/lang/String;)L")) return null;
+            int idx = indexOf(arr, n);
+            String[] preceding = collectPrecedingStringLdcs(arr, idx, 1);
+            if (preceding.length != 1) return null;
+            String ns = resolveOneArgFactoryNamespace(mi.owner, mi.name, mi.desc, classes);
+            return ns == null ? null : ns + ":" + preceding[0];
+        });
+    }
+
+    private static String walkBackForSingleStringLdc(AbstractInsnNode[] arr, int from) {
+        String[] s = collectPrecedingStringLdcs(arr, from, 1);
+        return s.length == 1 ? s[0] : null;
+    }
+
+    private static String[] collectPrecedingStringLdcs(AbstractInsnNode[] arr, int from, int n) {
+        List<String> out = new ArrayList<>();
+        for (int k = from - 1; k >= 0 && k >= from - 30 && out.size() < n; k--) {
+            if (arr[k] instanceof LdcInsnNode l && l.cst instanceof String s) out.add(s);
+        }
+        return out.toArray(new String[0]);
+    }
+
+    /** Inspects a 1-arg static factory body for its namespace constant. */
+    private static String resolveOneArgFactoryNamespace(String owner, String name, String desc,
+                                                         Map<String, ClassEntry> classes) {
+        ClassEntry ce = classes.get(owner);
+        if (ce == null || ce.cn.methods == null) return null;
+        MethodNode target = null;
+        for (MethodNode m : ce.cn.methods) {
+            if (m.name.equals(name) && m.desc.equals(desc)) { target = m; break; }
+        }
+        if (target == null || target.instructions == null) return null;
+        AbstractInsnNode[] arr = target.instructions.toArray();
+        for (int i = 0; i < arr.length; i++) {
+            if (!(arr[i] instanceof MethodInsnNode mi)) continue;
+            boolean ctor = mi.name.equals("<init>") && "(Ljava/lang/String;Ljava/lang/String;)V".equals(mi.desc);
+            boolean of = mi.name.equals("of") && mi.desc != null
+                    && mi.desc.startsWith("(Ljava/lang/String;Ljava/lang/String;)L");
+            if (!ctor && !of) continue;
+            for (int k = i - 1; k >= 0 && k >= i - 10; k--) {
+                if (arr[k] instanceof LdcInsnNode l && l.cst instanceof String s) return s;
             }
         }
         return null;
     }
 
-    private static String walkBackForClassLdc(AbstractInsnNode[] arr, int from) {
-        for (int j = from - 1; j >= 0 && j >= from - 30; j--) {
-            if (arr[j] instanceof LdcInsnNode l && l.cst instanceof Type t && t.getSort() == Type.OBJECT) {
-                return t.getClassName();
-            }
-        }
-        return null;
+    private static int indexOf(AbstractInsnNode[] arr, AbstractInsnNode target) {
+        for (int i = 0; i < arr.length; i++) if (arr[i] == target) return i;
+        return -1;
     }
 
     /**

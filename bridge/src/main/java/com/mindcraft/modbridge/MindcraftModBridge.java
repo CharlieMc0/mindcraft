@@ -28,6 +28,11 @@ public final class MindcraftModBridge {
     static volatile int MOD_COUNT = 0;
     static volatile String MODS_DIR = "";
 
+    // Cache for the registry-dump JSON keyed by file mtime so we re-read only when
+    // the dumper rewrites it on a server restart, not on every HTTP request.
+    private static volatile long REGISTRY_CACHE_MTIME = -1;
+    private static volatile String REGISTRY_CACHE_TEXT = null;
+
     public static void main(String[] args) throws Exception {
         String modsDir = args.length > 0 ? args[0]
                 : System.getProperty("user.home") + "/Library/Application Support/ModrinthApp/profiles/Homestead/mods";
@@ -63,41 +68,45 @@ public final class MindcraftModBridge {
         System.out.println("[bridge] Bridge listening on :" + port);
     }
 
-    /**
-     * Serve a slice of the registry JSON written by the dumper mod's RegistryDumper.
-     * Path: $CHDUMP_REGISTRY_PATH or $TMPDIR/mindcraft-modcompat-registry.json.
-     * Re-reads on every request so a server restart picks up new entries without
-     * needing to restart the bridge.
-     */
     private static void handleRegistry(HttpExchange ex, String key) throws IOException {
         Path file = registryPath();
         if (!Files.isRegularFile(file)) {
             respond(ex, 503, "{\"error\":\"registry dump not found\",\"path\":\"" + jsonEscape(file.toString()) + "\"}");
             return;
         }
-        String all = Files.readString(file, StandardCharsets.UTF_8);
-        // Cheap slice: find "<key>": and copy the matching {...}.
+        String all = readRegistryCached(file);
         String marker = "\"" + key + "\":";
         int start = all.indexOf(marker);
         if (start < 0) {
             respond(ex, 404, "{\"error\":\"key not in dump\",\"key\":\"" + key + "\"}");
             return;
         }
+        // Brace-balance scan to find the matching `}`. Acceptable here because
+        // RegistryDumper's output is a flat 2-level object — keys are ASCII-safe
+        // ids and values are simple strings; no nested braces inside values.
         int objStart = all.indexOf('{', start);
         int depth = 0, objEnd = -1;
         for (int i = objStart; i < all.length(); i++) {
             char c = all.charAt(i);
             if (c == '{') depth++;
-            else if (c == '}') {
-                depth--;
-                if (depth == 0) { objEnd = i + 1; break; }
-            }
+            else if (c == '}' && --depth == 0) { objEnd = i + 1; break; }
         }
         if (objEnd < 0) {
             respond(ex, 500, "{\"error\":\"malformed registry dump\"}");
             return;
         }
         respond(ex, 200, all.substring(objStart, objEnd));
+    }
+
+    private static String readRegistryCached(Path file) throws IOException {
+        long mtime = Files.getLastModifiedTime(file).toMillis();
+        if (REGISTRY_CACHE_TEXT != null && REGISTRY_CACHE_MTIME == mtime) {
+            return REGISTRY_CACHE_TEXT;
+        }
+        String text = Files.readString(file, StandardCharsets.UTF_8);
+        REGISTRY_CACHE_TEXT = text;
+        REGISTRY_CACHE_MTIME = mtime;
+        return text;
     }
 
     private static Path registryPath() {
@@ -108,18 +117,18 @@ public final class MindcraftModBridge {
 
     private static void handleHealth(HttpExchange ex) throws IOException {
         OwoIntrospector.Result r = OWO.get();
-        String body = "{"
-                + jsonField("status", r != null ? "ok" : "degraded")
-                + "," + jsonField("modsDir", MODS_DIR)
-                + "," + jsonNum("modCount", MOD_COUNT)
-                + "," + jsonBool("owoLoaded", r != null)
-                + (r != null
-                    ? "," + jsonNum("requiredChannels", r.requiredChannels.size())
-                      + "," + jsonNum("requiredControllers", r.requiredControllers.size())
-                      + "," + jsonNum("optionalChannels", r.optionalChannels.size())
-                    : "")
-                + "}";
-        respond(ex, 200, body);
+        StringBuilder b = new StringBuilder("{");
+        b.append(jsonField("status", r != null ? "ok" : "degraded"));
+        b.append(',').append(jsonField("modsDir", MODS_DIR));
+        b.append(',').append(jsonNum("modCount", MOD_COUNT));
+        b.append(',').append(jsonBool("owoLoaded", r != null));
+        if (r != null) {
+            b.append(',').append(jsonNum("requiredChannels", r.requiredChannels.size()));
+            b.append(',').append(jsonNum("requiredControllers", r.requiredControllers.size()));
+            b.append(',').append(jsonNum("optionalChannels", r.optionalChannels.size()));
+        }
+        b.append('}');
+        respond(ex, 200, b.toString());
     }
 
     private static void handleOwoHashes(HttpExchange ex) throws IOException {

@@ -353,7 +353,7 @@ export function getItemBlockSources(itemName) {
     let itemId = getItemId(itemName);
     let sources = [];
     for (let block of getAllBlocks()) {
-        if (block.drops.includes(itemId)) {
+        if (block.drops?.includes(itemId)) {
             sources.push(block.name);
         }
     }
