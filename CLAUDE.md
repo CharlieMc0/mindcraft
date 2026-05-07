@@ -86,6 +86,89 @@ Three pieces work together:
 
 ---
 
+## Diagnosing a kick: server log signal map
+
+When a connect attempt fails, the FIRST thing to check is the server log. Two
+specific lines map to two very different problems:
+
+| Server log line | Means |
+| --- | --- |
+| `[Handshake] Handshake failed, client did not respond to channel query` | Bot's owo response was treated as `success=false`. Either bot didn't reply, or mineflayer's built-in `pluginChannels.js` auto-responder beat ours. Check that `attachModCompat` ran and stripped the built-in listener. |
+| `[Handshake] Receiving client channels` then disconnect with `"channels with mismatched hashes: [<list>]"` | Bot replied successfully; hashes don't match. Compare bridge `/owo/debug/<id>` output against the dumper mod's `[CH-DUMP]` log on the server — they should agree byte-for-byte. If they don't, the bridge's ASM walk-back missed a registration pattern; extend `OwoIntrospector`. |
+| `[Handshake] Handshake completed successfully` then disconnect with `{"text":""}` | Owo passed; frozenlib's case-1 path kicked with `Component.empty()`. syncVersion was -1 when GOODBYE_PING arrived. Reply landed too late on the wire. |
+| `[Handshake] Handshake completed successfully` then bot stays connected, joins | Working as intended. |
+
+The dumper mod (`bridge/dumper-mod/`) is the verification layer for the bridge:
+its reflection-based `[CH-DUMP]` output is the ground truth for what the
+runtime computed. When in doubt, drop the jar in the server's `mods/` and
+restart.
+
+---
+
+## Performance traps (lessons from real regressions)
+
+- **`getAllBlocks()` and `getAllItems()` run on every planner tick.** The
+  registry overlay's synthetic record arrays must be built ONCE at fetch
+  time, not per call. ~21K modded blocks × per-tick allocation tanks the
+  LLM planner. See `registry_overlay.js:loadKind`.
+- **Synthetic minecraft-data records are sparse.** They have `id`, `name`,
+  `displayName`, `stackSize`, `diggable`, `drops:[]` — and that's it.
+  Anywhere the codebase reads a deeper field (e.g. `block.harvestTools`,
+  `block.boundingBox`), wrap with `?.` or expect `undefined`. The
+  `getItemBlockSources` crash on `block.drops.includes` came from this.
+- **Bridge HTTP handlers are single-threaded** (default `setExecutor(null)`).
+  `/registry/*` reads a 2 MB file; cache by mtime so the bot's startup
+  doesn't pay 2 fetches × 2 MB on every reconnect. See
+  `MindcraftModBridge.readRegistryCached`.
+- **Smoke test budget is ~60s.** mineflayer's default `checkTimeoutInterval`
+  kicks the bot if no keepalive round-trips for 60s. The smoke test must
+  finish all in-game steps inside that window, or the timeout fires
+  mid-test and reports false failures. Don't add slow assertions naively.
+
+---
+
+## Static analysis pattern for ASM scanning
+
+`OwoIntrospector` and any future ASM-based scanner should use the shared
+`scanBack(arr, from, window, predicate)` helper in `OwoIntrospector.java`,
+not hand-rolled `for (int j = from-1; j >= 0 && j >= from-N; j--)` loops.
+Five copies of that loop existed before being collapsed; same shape is
+likely to keep recurring as new mod patterns surface.
+
+When you find a kick like `"channels with mismatched hashes: <new mod>"`:
+1. Drop the dumper mod into the server, capture the runtime `[CH-DUMP]`
+   for that channel.
+2. Compare to the bridge's `/owo/debug/<id>` reconstruction.
+3. The diff tells you which registration pattern was missed.
+4. Add a new `walkBackForXxxIdentifier` flavour using `scanBack`.
+
+---
+
+## When bot writes need synchronous timing
+
+`frozenlib_responder` writes the pre-emptive registry-sync reply
+synchronously inside `client.once('success', ...)`. NOT `setImmediate`,
+NOT `Promise.then`. Reasons (relearn-the-hard-way list):
+
+1. After the LOGIN_SUCCESS packet is read, mineflayer immediately processes
+   any buffered PLAY-state packets that arrived in the same TCP segment.
+   Those include frozenlib's hello + `play.ping(id=0)` + `play.ping(id=1)`.
+2. Mineflayer's `lib/plugins/game.js` auto-pongs every `play.ping` from a
+   sync listener.
+3. If our reply is deferred to a later macrotask, the auto-pongs land on
+   the wire FIRST. Server's frozenlib case-1 fires with `syncVersion=-1`
+   and kicks.
+4. The same logic explains why we DON'T strip mineflayer's `'ping'`
+   listener: it's registered later in plugin init, and stripping it
+   (a) races plugin init and (b) leaves the bot mute on legitimate
+   keepalives. The fix is timing-of-our-write, not stripping theirs.
+
+For any future protocol that runs in the early-PLAY window, follow the
+same pattern: hook `success`, write synchronously, set a flag, then
+optionally re-confirm reactively when the server's hello arrives.
+
+---
+
 ## Run + test
 
 Two long-lived processes (start once, leave running):
