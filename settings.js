@@ -8,6 +8,7 @@ const settings = {
     // gates through the local mindcraft-modbridge Java daemon. null = vanilla.
     "modpack": "homestead",
     "modbridge_url": "http://localhost:7474",
+    "allow_modded_sleeping_bag": true, // enable Comforts sleeping-bag fallback when no bed nearby. set false for vanilla-only sleep behavior.
 
     // the mindserver manages all agents and hosts the UI
     "mindserver_port": 8080,

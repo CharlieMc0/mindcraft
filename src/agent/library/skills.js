@@ -1540,34 +1540,149 @@ export async function useDoor(bot, door_pos=null) {
     return true;
 }
 
+const COMFORTS_BAG_COLORS = [
+    'white','orange','magenta','light_blue','yellow','lime','pink','gray',
+    'light_gray','cyan','purple','blue','brown','green','red','black'
+];
+
+function findSleepBlocksNearby(bot, maxDistance = 32, count = 3) {
+    const moddedOn = settings.allow_modded_sleeping_bag !== false;
+    const byName = bot.findBlocks({
+        matching: (b) => {
+            if (!b || !b.name) return false;
+            if (b.name === 'bed' || b.name.endsWith('_bed')) return true;
+            if (moddedOn && b.name.includes('sleeping_bag')) return true;
+            return false;
+        },
+        maxDistance,
+        count,
+    });
+
+    let extra = [];
+    if (moddedOn) {
+        const bagIds = COMFORTS_BAG_COLORS
+            .map((c) => mc.getBlockId(`comforts:sleeping_bag_${c}`))
+            .filter((id) => typeof id === 'number');
+        if (bagIds.length > 0) {
+            extra = bot.findBlocks({ matching: bagIds, maxDistance, count });
+        }
+    }
+
+    const seen = new Set();
+    const all = [];
+    for (const p of byName.concat(extra)) {
+        const key = `${p.x},${p.y},${p.z}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        const blk = bot.blockAt(p);
+        if (blk) all.push(blk);
+    }
+    return all.sort((a, b) =>
+        a.position.distanceTo(bot.entity.position) -
+        b.position.distanceTo(bot.entity.position)
+    );
+}
+
+function findSleepingBagItemInInventory(bot) {
+    return bot.inventory.items().find((i) => i && i.name && i.name.includes('sleeping_bag'));
+}
+
+async function trySleepOnBlock(bot, block) {
+    const isVanillaBed = block.name === 'bed' || (block.name && block.name.endsWith('_bed'));
+    if (isVanillaBed) {
+        await bot.sleep(block);
+        return bot.isSleeping;
+    }
+    await bot.activateBlock(block);
+    const deadline = Date.now() + 3000;
+    while (!bot.isSleeping && Date.now() < deadline) {
+        await new Promise((r) => setTimeout(r, 100));
+    }
+    return bot.isSleeping;
+}
+
+async function deploySleepingBagAndSleep(bot, bagItem) {
+    const feetRef = bot.blockAt(bot.entity.position.offset(0, -1, 0));
+    if (!feetRef || feetRef.name === 'air') {
+        log(bot, `Cannot deploy sleeping bag — no solid ground beneath me.`);
+        return false;
+    }
+    try {
+        await bot.equip(bagItem, 'hand');
+        await bot.placeBlock(feetRef, new Vec3(0, 1, 0));
+    } catch (err) {
+        log(bot, `Could not deploy sleeping bag: ${err.message}`);
+        return false;
+    }
+    const placed = bot.blockAt(feetRef.position.offset(0, 1, 0));
+    const start = Date.now();
+    const deadline = start + 3500;
+    let reactivated = false;
+    while (!bot.isSleeping && Date.now() < deadline) {
+        await new Promise((r) => setTimeout(r, 100));
+        if (!reactivated && Date.now() - start > 500 && placed) {
+            reactivated = true;
+            try { await bot.activateBlock(placed); }
+            catch (err) { log(bot, `activateBlock on placed bag failed: ${err.message}`); }
+        }
+    }
+    return bot.isSleeping;
+}
+
+async function waitUntilWoken(bot) {
+    bot.modes.pause('unstuck');
+    while (bot.isSleeping) {
+        await new Promise((r) => setTimeout(r, 500));
+    }
+}
+
 export async function goToBed(bot) {
     /**
-     * Sleep in the nearest bed.
+     * Sleep in the nearest bed or Comforts sleeping bag. Falls back to
+     * deploying a sleeping-bag item from inventory if no sleep block is in
+     * range and modded support is enabled.
      * @param {MinecraftBot} bot, reference to the minecraft bot.
-     * @returns {Promise<boolean>} true if the bed was found, false otherwise.
+     * @returns {Promise<boolean>} true if the bot slept and woke, false otherwise.
      * @example
      * await skills.goToBed(bot);
      **/
-    const beds = bot.findBlocks({
-        matching: (block) => {
-            return block.name.includes('bed');
-        },
-        maxDistance: 32,
-        count: 1
-    });
-    if (beds.length === 0) {
-        log(bot, `Could not find a bed to sleep in.`);
+    const candidates = findSleepBlocksNearby(bot, 32, 3);
+
+    for (const block of candidates) {
+        const loc = block.position;
+        const moved = await goToPosition(bot, loc.x, loc.y, loc.z);
+        if (!moved) continue;
+        const fresh = bot.blockAt(loc);
+        if (!fresh) continue;
+        try {
+            const ok = await trySleepOnBlock(bot, fresh);
+            if (!ok) continue;
+        } catch (err) {
+            log(bot, `Could not sleep here: ${err.message}`);
+            continue;
+        }
+        log(bot, `You are in bed.`);
+        await waitUntilWoken(bot);
+        log(bot, `You have woken up.`);
+        return true;
+    }
+
+    if (settings.allow_modded_sleeping_bag === false) {
+        log(bot, `Could not find a bed nearby.`);
         return false;
     }
-    let loc = beds[0];
-    await goToPosition(bot, loc.x, loc.y, loc.z);
-    const bed = bot.blockAt(loc);
-    await bot.sleep(bed);
-    log(bot, `You are in bed.`);
-    bot.modes.pause('unstuck');
-    while (bot.isSleeping) {
-        await new Promise(resolve => setTimeout(resolve, 500));
+    const bag = findSleepingBagItemInInventory(bot);
+    if (!bag) {
+        log(bot, `Could not find a bed nearby and have no sleeping bag.`);
+        return false;
     }
+    log(bot, `No bed nearby — deploying ${bag.name}.`);
+    const ok = await deploySleepingBagAndSleep(bot, bag);
+    if (!ok) {
+        log(bot, `Failed to sleep in deployed sleeping bag.`);
+        return false;
+    }
+    await waitUntilWoken(bot);
     log(bot, `You have woken up.`);
     return true;
 }

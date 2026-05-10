@@ -186,6 +186,30 @@ const modes_list = [
         }
     },
     {
+        name: 'sleep_at_night',
+        description: 'Find a bed or deploy a sleeping bag and sleep through the night.',
+        interrupts: ['action:followPlayer'],
+        on: true,
+        active: false,
+        attempted_this_night: false,
+        update: async function (agent) {
+            const bot = agent.bot;
+            const t = bot.time.timeOfDay;
+            if (t < 12000) {
+                this.attempted_this_night = false;
+                return;
+            }
+            if (t < 13000 || t > 23000) return;
+            if (bot.isSleeping || this.attempted_this_night) return;
+
+            this.attempted_this_night = true;
+            say(agent, 'Getting some sleep.');
+            execute(this, agent, async () => {
+                await skills.goToBed(bot);
+            });
+        }
+    },
+    {
         name: 'item_collecting',
         description: 'Collect nearby items when idle.',
         interrupts: ['action:followPlayer'],

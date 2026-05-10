@@ -23,6 +23,7 @@
         "torch_placing": true,
         "elbow_room": true,
         "idle_staring": true,
+        "sleep_at_night": true,
         "cheat": false
     },
 
