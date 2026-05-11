@@ -1,6 +1,6 @@
 const settings = {
     "minecraft_version": "1.20.1",
-    "host": "206.66.126.94",
+    "host": "207.66.126.94",
     "port": 25565,
     "auth": "microsoft",
 

@@ -186,7 +186,7 @@ MODE=vanilla         ./scripts/dev/run-bot.sh    # Paper test, :25566
 ALLOW_REMOTE=1 MODE=homestead ./scripts/dev/run-bot.sh   # friend's server (gated)
 ```
 
-Friend's remote server (`206.66.126.94:25565`) is **off limits for unattended
+Friend's remote server (`207.66.126.94:25565`) is **off limits for unattended
 runs**. The `ALLOW_REMOTE=1` gate makes that explicit. Use the local server
 for everything.
 
@@ -232,7 +232,7 @@ handler short-circuits (most do) — or write a real responder under
 
 ## Don't / be careful
 
-- **Don't connect to friend's `206.66.126.94:25565`** without explicit user
+- **Don't connect to friend's `207.66.126.94:25565`** without explicit user
   approval. The `ALLOW_REMOTE=1` gate is there for a reason — every connection
   is visible to admin.
 - **Don't add new dependencies** to `bridge/`. It's intentionally `javac` +

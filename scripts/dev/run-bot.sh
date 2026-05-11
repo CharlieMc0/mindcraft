@@ -18,12 +18,12 @@ case "$MODE" in
         # Real friend's server. Each connect is visible to admin. Requires
         # explicit opt-in via env var to avoid accidental traffic.
         if [ "${ALLOW_REMOTE:-}" != "1" ]; then
-            echo "MODE=homestead targets the real Homestead server (206.66.126.94:25565)."
+            echo "MODE=homestead targets the real Homestead server (207.66.126.94:25565)."
             echo "Refusing to connect without ALLOW_REMOTE=1."
             echo "Use MODE=homestead-local for unsupervised testing."
             exit 1
         fi
-        OVERRIDES='{"host":"206.66.126.94","port":25565,"auth":"microsoft","modpack":"homestead","init_message":"hello world"}'
+        OVERRIDES='{"host":"207.66.126.94","port":25565,"auth":"microsoft","modpack":"homestead","init_message":"hello world"}'
         ;;
     homestead-local)
         # Local Homestead Fabric server on :25567 (offline-mode). Safe to spam.
