@@ -74,6 +74,11 @@ export function initBot(username) {
 
     const bot = createBot(options);
 
+    // Suppress PartialReadError on huge modded recipe/command packets — mineflayer's
+    // protodef can't decode some oversize modded payloads but they aren't fatal.
+    // Without this, every decode failure becomes an unhandled 'error' event.
+    bot._client.on('error', () => {});
+
     // Attach early — login_plugin_request fires during login phase, before 'login' event.
     // When settings.modpack is set, this routes owo:handshake (and future gates) to a
     // local Java bridge daemon. With modpack=null, only diagnostic logging runs.
