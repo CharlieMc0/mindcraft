@@ -1631,8 +1631,14 @@ async function deploySleepingBagAndSleep(bot, bagItem) {
 
 async function waitUntilWoken(bot) {
     bot.modes.pause('unstuck');
-    while (bot.isSleeping) {
-        await new Promise((r) => setTimeout(r, 500));
+    try {
+        await new Promise((resolve) => {
+            if (!bot.isSleeping) return resolve();
+            const timeout = setTimeout(resolve, 10 * 60 * 1000);
+            bot.once('wake', () => { clearTimeout(timeout); resolve(); });
+        });
+    } finally {
+        bot.modes.unpause('unstuck');
     }
 }
 

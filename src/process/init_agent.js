@@ -2,29 +2,55 @@ import { Agent } from '../agent/agent.js';
 import { serverProxy } from '../agent/mindserver_proxy.js';
 import yargs from 'yargs';
 
+// protodef's FullPacketParser does `console.log(e.stack)` on every
+// PartialReadError. Modded servers emit oversize recipe/command packets that
+// trigger this every spawn — 4+ multi-KB sync stderr writes that stall the
+// event loop long enough for keep_alive ACKs to go out late, causing the
+// server to stop sending keep_alive and ultimately kicking the bot at the
+// checkTimeoutInterval. Suppress these stack dumps (the bridge layer already
+// has structured logging for handshake issues; in-band decode failures here
+// are non-fatal — protodef returns cb() with no error).
+const _origLog = console.log.bind(console);
+const _seenPartialReadErrors = new Set();
+console.log = (...args) => {
+    if (typeof args[0] === 'string' && args[0].startsWith('PartialReadError:')) {
+        const sig = args[0].split('\n')[0];
+        if (_seenPartialReadErrors.size > 64) _seenPartialReadErrors.clear();
+        if (!_seenPartialReadErrors.has(sig)) {
+            _seenPartialReadErrors.add(sig);
+            _origLog(`[suppressing repeated stack dumps] ${sig}`);
+        }
+        return;
+    }
+    _origLog(...args);
+};
+
 // Pathfinder rejects with PathStopped/GoalChanged when the bot is interrupted
 // mid-path. action_manager catches the first reject, but pathfinder may emit a
 // follow-up reject from the stop() teardown that nothing is awaiting, which
-// node treats as fatal. Swallow these specific noise rejections.
+// node treats as fatal. Only swallow those two — NoPath/Timeout are caller-
+// observable failures and `Timeout` is a name shared with many other libs.
 process.on('unhandledRejection', (err) => {
     const name = err?.name || '';
-    if (name === 'PathStopped' || name === 'GoalChanged' || name === 'NoPath' || name === 'Timeout') {
+    if (name === 'PathStopped' || name === 'GoalChanged') {
         console.warn(`[unhandledRejection swallowed] ${name}: ${err.message}`);
         return;
     }
     console.error('Unhandled promise rejection:', err);
 });
 
-// Mineflayer plugins (block_actions, etc.) throw synchronously on modded
-// blocks whose metadata shape doesn't match vanilla (e.g. chests where
-// `parseChestMetadata(block).facing` is undefined → Object.values throws).
-// Swallow plugin-side noise so the agent stays alive on heavily-modded servers.
+// mineflayer's block_actions plugin throws synchronously on modded chests
+// where `parseChestMetadata(block).facing` is undefined (the FACING_MAP
+// lookup returns undefined → Object.values throws). Narrow guard: both the
+// stack must point at block_actions AND the message must be the known
+// signature, so real bugs in mineflayer's other plugins still surface.
 process.on('uncaughtException', (err) => {
     const msg = err?.message || '';
     const stack = err?.stack || '';
-    if (stack.includes('mineflayer/lib/plugins/') ||
-        msg.includes('Cannot convert undefined or null to object') ||
-        msg.includes('Cannot read properties of undefined')) {
+    const isKnownPluginSig =
+        stack.includes('mineflayer/lib/plugins/block_actions.js') &&
+        msg.includes('Cannot convert undefined or null to object');
+    if (isKnownPluginSig) {
         console.warn(`[uncaughtException swallowed] ${err.name}: ${msg}`);
         return;
     }
