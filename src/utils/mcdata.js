@@ -66,7 +66,7 @@ export function initBot(username) {
         port: settings.port,
         auth: settings.auth,
         version: mc_version,
-        checkTimeoutInterval: 60000,  // 60s keep-alive check (default 30s) — reduces disconnects on slow servers
+        checkTimeoutInterval: 120000,  // 120s keep-alive check (default 30s) — reduces disconnects on slow modded servers
     }
     if (!mc_version || mc_version === "auto") {
         delete options.version;
@@ -76,8 +76,9 @@ export function initBot(username) {
 
     // Suppress PartialReadError on huge modded recipe/command packets — mineflayer's
     // protodef can't decode some oversize modded payloads but they aren't fatal.
-    // Without this, every decode failure becomes an unhandled 'error' event.
+    // mineflayer forwards client errors to bot, so listen on both.
     bot._client.on('error', () => {});
+    bot.on('error', () => {});
 
     // Attach early — login_plugin_request fires during login phase, before 'login' event.
     // When settings.modpack is set, this routes owo:handshake (and future gates) to a
