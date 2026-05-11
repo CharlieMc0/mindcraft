@@ -249,6 +249,135 @@ handler short-circuits (most do) — or write a real responder under
 
 ---
 
+## Process-level error guards (`src/process/init_agent.js`)
+
+Each mindcraft bot runs as its own `node` subprocess spawned from
+`src/process/agent_process.js`. Guards on the *parent* (`main.js`) don't
+catch errors inside the agent — they must live in `init_agent.js`.
+
+Three guards installed at the top of `init_agent.js`:
+
+1. **`console.log` monkey-patch** — protodef's `FullPacketParser` does
+   `console.log(e.stack)` on every `PartialReadError`. Heavily-modded servers
+   emit recipe/command packets large enough that protodef can't decode them,
+   producing 4+ multi-KB sync stderr writes per spawn. Those writes stall the
+   event loop long enough that the bot's `keep_alive` ACK goes out late, the
+   server stops sending more `keep_alive`s, and the bot kicks itself at
+   `checkTimeoutInterval`. The patch silently drops these stack dumps after
+   logging one summary line per unique signature (Set capped at 64 entries).
+   The decode failure itself is non-fatal — protodef returns `cb()`, the bad
+   packet is dropped, the stream survives.
+
+2. **`unhandledRejection`** — narrow swallow list: `PathStopped` and
+   `GoalChanged` only. mineflayer-pathfinder's `goto.js` emits these from
+   the `stop()` teardown chain; `action_manager` catches the first, but the
+   teardown reject has no awaiter and would otherwise crash the process.
+   **Don't widen** to `NoPath` / `Timeout` / generic names — `NoPath` is a
+   legitimate caller-observable failure and `Timeout` is shared with many
+   libs.
+
+3. **`uncaughtException`** — narrow guard: requires BOTH the stack path
+   `mineflayer/lib/plugins/block_actions.js` AND the message `Cannot convert
+   undefined or null to object`. This is the `FACING_MAP[parseChestMetadata
+   (block).facing]` crash on modded chests where `.facing` is undefined.
+   **Don't widen** the predicate to OR — common JS errors are common, and
+   broad swallow hides real bugs in our own code.
+
+Companion at `src/utils/mcdata.js`:
+
+- `bot._client.on('error', () => {})` + `bot.on('error', () => {})` — empty
+  swallowers for the dual-emit chain. mineflayer's `loader.js:109` forwards
+  client-level errors to the bot, so a listener is needed on each event
+  emitter. Without the bot-level one, node's "unhandled 'error' event"
+  formatter prints + crashes BEFORE `uncaughtException` can intervene.
+- `checkTimeoutInterval: 120000` — 60 s default isn't enough headroom on
+  remote modded servers that are slow to send the first keep_alive while
+  still pushing registry payloads. Bumping helps; doesn't fix the underlying
+  cause (event-loop stall above).
+
+## Diagnosing a quit: what to check, in order
+
+If the bot logs in then dies after a short time, check the agent log
+(`logs/bot-*.log`) for one of these signatures:
+
+| Signature | Cause | Fix |
+| --- | --- | --- |
+| Many `PartialReadError:` stack dumps followed by `client timed out after Nms` / `Disconnected: keepaliveerror` | console.log spam stalled the event loop → keepalive miss | Confirm `init_agent.js` console patch is in place; check `node --check` passes |
+| `TypeError: Cannot convert undefined or null to object` at `block_actions.js:79` (single sync trace, immediate exit) | mineflayer chokes on a modded chest's missing `facing` | Confirm `uncaughtException` guard is in place; if same crash from a different plugin, narrow-extend the guard |
+| `PathStopped` stack trace twice + `Agent process exited` | pathfinder dual-reject; `action_manager` caught first, teardown reject was uncaught | Confirm `unhandledRejection` guard is in place |
+| `Ollama Status: 500` or `llama runner process no longer running: GGML_ASSERT failed` | Ollama runner crash (llama.cpp bug) | `pkill -f "ollama runner"` (serve auto-respawns); try smaller quant if crash recurs same prompt |
+| `Disconnected: keepaliveerror` after several minutes of clean activity | Server stopped sending keep_alive (network or server-side anti-bot rate-limit) | Accept the auto-restart cycle, or bump `checkTimeoutInterval` further |
+| `[LoginGuard] Connection Failed: Server is under maintenance or restarting.` | Server's LoginGuard mod kicked the bot at login | Usually transient — server still warming after restart. Retry once |
+| `EADDRINUSE` on `:8080` | A previous mindcraft process is still holding the mindserver port | `pkill -f "node main.js"` then retry; or set `mindserver_port` to a free port |
+
+## Sleep-at-night mode (`sleep_at_night`)
+
+Auto-trigger at dusk (`bot.time.timeOfDay ∈ [13000, 23000]`). Once-per-night:
+sets `attempted_this_night` true, fires `goToBed`, doesn't retry until
+`t < 12000` (dawn reset). Code in `src/agent/modes.js`, skill in
+`src/agent/library/skills.js:goToBed`.
+
+`goToBed` order:
+1. Find vanilla bed within 32 blocks → `bot.sleep(block)`.
+2. Find Comforts sleeping-bag *block* within 32 blocks → `bot.activateBlock`.
+3. (Modded support on) Find sleeping-bag *item* in inventory → equip, deploy
+   on the block under feet via `bot.placeBlock`, then `activateBlock` if not
+   asleep within 500 ms. Comforts auto-returns the bag on wake.
+
+Modded fallback gated by `settings.allow_modded_sleeping_bag` (default true).
+Set `false` for vanilla-only behavior.
+
+Wake wait uses `bot.once('wake', ...)` with 10-min safety timeout. The
+`'unstuck'` mode is paused during sleep and unpaused in a `finally` so a
+hung wake doesn't leave unstuck disabled.
+
+## Quick commands cheatsheet
+
+```bash
+# Bot lifecycle
+ALLOW_REMOTE=1 MODE=homestead ./scripts/dev/run-bot.sh   # friend's server (gated)
+MODE=homestead-local ./scripts/dev/run-bot.sh            # local Fabric server
+pkill -f "node main.js" && pkill -f init_agent           # full stop (parent + subprocess)
+
+# Logs
+tail -F logs/bot-homestead-*.log
+
+# Ollama health
+curl -s http://localhost:11434/api/tags | jq '.models[].name'
+curl -s -X POST http://localhost:11434/api/generate \
+  -d '{"model":"sweaterdog/andy-4:q8_0","prompt":"hi","stream":false}' | jq .response
+pkill -f "ollama runner"   # kill stuck runner; serve auto-respawns
+
+# Bridge health
+curl -s http://localhost:7474/registry/blocks | jq 'length'
+```
+
+## Worktree workflow for parallel feature work
+
+The user actively plays on the bot from the main checkout. For any
+non-trivial feature, branch off into a worktree so they can keep their
+session running:
+
+```bash
+git worktree add -b feat/<name> ../mindcraft-<name> feat/modded-fabric-support
+ln -s ../mindcraft/node_modules ../mindcraft-<name>/node_modules   # share deps
+# do all edits in ../mindcraft-<name>/...
+git -C ../mindcraft-<name> commit ...
+git merge --ff-only feat/<name>          # fast-forward base branch
+git worktree remove ../mindcraft-<name>
+git branch -d feat/<name>
+```
+
+## Modded-feature toggle convention
+
+Every new feature that depends on modded items/blocks must be gated by a
+`settings.js` flag named `allow_modded_<feature>`, default `true`, that
+short-circuits the modded code path when set to `false`. The vanilla path
+must continue to work as if the feature didn't exist. See
+`allow_modded_sleeping_bag` for the canonical example.
+
+---
+
 ## Open work (in rough priority)
 
 - Wire `registry_client.js` into mindcraft's existing block/item APIs so
@@ -257,6 +386,13 @@ handler short-circuits (most do) — or write a real responder under
   equip-slot, Farmer's Delight crops). Each is small + research-heavy.
 - Auto-restart bridge daemon (launchd plist) — only worth it if it actually
   crashes (hasn't yet).
+- Per-agent keep-alive proactive write — current 120 s timeout is workable
+  but on the slowest spawns the server still drops the bot. Investigate
+  whether mineflayer can be patched to send empty keep_alive proactively
+  if the server's first one is late.
+- Investigate `parseChestMetadata` for ALL modded chests — current guard
+  papers over the crash; a real fix would teach mineflayer's `FACING_MAP`
+  about modded blockstate keys via the bridge overlay.
 
 ---
 
